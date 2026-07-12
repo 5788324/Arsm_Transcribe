@@ -1,0 +1,23 @@
+# Runtime outputs and machine-specific data
+cache/
+logs/
+build/
+dist/
+input/
+output/
+
+# Ad hoc verification data
+tmp_*/
+tmp_*.yaml
+model_compare.json
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Local environment and editor files
+.venv/
+venv/
+.env
+.idea/
+.vscode/

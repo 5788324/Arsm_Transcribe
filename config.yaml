@@ -1,0 +1,53 @@
+﻿paths:
+  cache_dir: cache
+  output_dir: output
+  log_dir: logs
+
+asr:
+  backend: faster_whisper
+  model: large-v3
+  device: cuda
+  compute_type: float16
+  language: ja
+  faster_whisper:
+    vad:
+      model: asmr_optimized
+      threshold: 0.5
+    runner:
+      executable_path: F:\AI\Model\models\infer.exe
+      working_dir: F:\AI\Model\models
+      model_name_or_path: models
+      generation_config: generation_config.json5
+      task: transcribe
+      audio_suffixes: mp3,wav,flac,m4a,aac,ogg,wma,mp4,mkv,avi,mov,webm,flv,wmv
+      sub_formats: lrc
+      output_dir: cache
+      command_template: null
+      existing_lrc_path: null
+
+segment_cleaner:
+  merge_gap_seconds: 0.5
+  long_silence_seconds: 10.0
+
+translate:
+  enabled: true
+  provider: openai_compatible
+  base_url: http://127.0.0.1:1234/v1
+  model: folder02@q4_k_s
+  batch_size: 4
+  min_batch_size_on_retry: 1
+  timeout_seconds: 120
+  temperature: 0.1
+  system_prompt: >-
+    Translate Japanese ASMR transcript lines into natural Simplified Chinese for subtitle use.
+    Preserve tone and meaning. Keep a strict 1:1 mapping with the input lines.
+    Return JSON only.
+
+lrc:
+  bilingual_format: same_line
+  max_chars_per_line: 45
+  output_mode: same_directory
+  primary_variant: zh
+  emit_ja_lrc: false
+  emit_zh_lrc: false
+  emit_bilingual_lrc: false

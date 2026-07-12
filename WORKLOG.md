@@ -1,3 +1,26 @@
+### 2026-07-12 - AI: Codex - 补批处理失败重试并修复状态文档
+
+**打算做什么 / 为什么**
+- 为批处理增加“仅重试 `logs/failed.txt` 中失败音频”的 CLI 入口。上次 `E:\arsm` 大库运行中 LM Studio 服务停止，导致大量文件在翻译阶段失败；恢复后不应重新扫描并处理整个目录。
+- 修复 `PROJECT.md` 当前状态表中损坏的 EXE 文字，并将批处理状态表改为反映真实大库运行结果，而不是仅写“小规模实测”。
+
+**实际完成**
+- 在 `modules/batch.py` 增加 `retry_failed()`：从 `logs/failed.txt` 读取并去重音频路径，仅处理失败项；首次重试前将原清单备份为 `logs/failed.before_retry.txt`，本次仍失败项写回新的 `failed.txt`。
+- 增加文件存在性检查，原文件被移动或删除时会明确记录 `FileNotFoundError`，不会中断剩余重试。
+- 在 `app.py` 增加命令：`python -B app.py retry-failed`，可选 `--overwrite`。
+- 更新 `README.md` 的重试说明，并修复 `PROJECT.md` 中 EXE 状态乱码及批处理状态，使其反映 2302 文件历史批次因 LM Studio 服务停止而未完成验收的事实。
+
+**验证**
+- `python -m py_compile app.py modules\\batch.py` 通过。
+- `python -B app.py retry-failed --help` 通过。
+- 隔离测试覆盖 4 条失败记录：路径去重后总数 4，得到成功 1、跳过 1、持续失败 1、文件缺失 1；旧清单备份存在，新清单只保留后两项。
+- 未运行真实 `retry-failed`：本机 LM Studio 当前不可连接，直接运行只会让 1836 条失败记录重复失败。
+
+**下一步**
+- 启动 LM Studio 并确认 `http://127.0.0.1:1234/v1/models` 可访问后，先抽测 1-3 个文件的翻译质量，再执行 `python -B app.py retry-failed` 恢复大库。
+- 完成恢复后，以真实目录验收桌面 GUI/EXE 的启动、进度、失败恢复和播放器加载；Qwen3-ASR 仍留在此后。
+
+---
 ### 2026-07-12 - AI: Codex - 为 GitHub 补充项目 README
 
 **打算做什么 / 为什么**

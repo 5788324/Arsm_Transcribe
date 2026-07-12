@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
 
 from modules.io_utils import (
+    AUDIO_EXTENSIONS,
     append_log_line,
     batch_status_path,
     discover_audio_files,
@@ -42,8 +44,7 @@ class BatchProcessor:
         failed_path = failed_log_path(self.log_dir)
         status_path = batch_status_path(self.log_dir)
         failed_path.parent.mkdir(parents=True, exist_ok=True)
-        if failed_path.exists():
-            failed_path.unlink()
+        failed_path.unlink(missing_ok=True)
 
         started_at = _now_iso()
         self._write_status(
@@ -58,6 +59,7 @@ class BatchProcessor:
             current_index=0,
             current_audio_path=None,
             last_error=None,
+            mode='full_scan',
         )
 
         discovered = 0
@@ -90,10 +92,42 @@ class BatchProcessor:
                         current_index=discovered,
                         current_audio_path=str(audio_path),
                         last_error=None,
+                        mode='full_scan',
                     )
 
         dump_json(reference_scan_path(self.cache_dir), {'items': reference_items})
+        return self._run_audio_paths(
+            audio_files,
+            overwrite=overwrite,
+            reference_items=reference_items,
+            started_at=started_at,
+            mode='full_scan',
+        )
 
+    def retry_failed(self, *, overwrite: bool = False) -> BatchSummary:
+        """Re-run only audio paths listed in the current failure log."""
+        failed_path = failed_log_path(self.log_dir)
+        audio_files = _read_failed_audio_paths(failed_path)
+        self._backup_and_reset_failed_log(failed_path)
+        return self._run_audio_paths(
+            audio_files,
+            overwrite=overwrite,
+            reference_items=[],
+            started_at=_now_iso(),
+            mode='retry_failed',
+        )
+
+    def _run_audio_paths(
+        self,
+        audio_files: list[Path],
+        *,
+        overwrite: bool,
+        reference_items: list[dict[str, Any]],
+        started_at: str,
+        mode: str,
+    ) -> BatchSummary:
+        failed_path = failed_log_path(self.log_dir)
+        status_path = batch_status_path(self.log_dir)
         succeeded = 0
         failed = 0
         skipped = 0
@@ -110,12 +144,15 @@ class BatchProcessor:
             current_index=0,
             current_audio_path=None,
             last_error=None,
+            mode=mode,
         )
 
         for index, audio_path in enumerate(audio_files, start=1):
             _safe_print(f'[batch] {index}/{total}: {audio_path}')
             current_error = None
             try:
+                if not audio_path.is_file():
+                    raise FileNotFoundError(f'audio file no longer exists: {audio_path}')
                 status = self.pipeline(audio_path, overwrite=overwrite)
                 if status == 'skipped':
                     skipped += 1
@@ -124,7 +161,7 @@ class BatchProcessor:
             except Exception as exc:
                 failed += 1
                 current_error = f'{type(exc).__name__}: {exc}'
-                append_log_line(failed_path, f'{audio_path}	{current_error}')
+                append_log_line(failed_path, f'{audio_path}\t{current_error}')
                 _safe_print(f'[batch][failed] {audio_path} -> {current_error}')
 
             self._write_status(
@@ -139,6 +176,7 @@ class BatchProcessor:
                 current_index=index,
                 current_audio_path=str(audio_path),
                 last_error=current_error,
+                mode=mode,
             )
 
         self._write_status(
@@ -153,8 +191,8 @@ class BatchProcessor:
             current_index=total,
             current_audio_path=None,
             last_error=None,
+            mode=mode,
         )
-
         return BatchSummary(
             total=total,
             succeeded=succeeded,
@@ -163,8 +201,36 @@ class BatchProcessor:
             reference_items=reference_items,
         )
 
+    def _backup_and_reset_failed_log(self, failed_path: Path) -> None:
+        failed_path.parent.mkdir(parents=True, exist_ok=True)
+        if not failed_path.exists():
+            return
+        backup_path = failed_path.with_name('failed.before_retry.txt')
+        shutil.copyfile(failed_path, backup_path)
+        failed_path.unlink()
+
     def _write_status(self, status_path: Path, **payload: Any) -> None:
         dump_json(status_path, payload)
+
+
+def _read_failed_audio_paths(failed_path: Path) -> list[Path]:
+    if not failed_path.exists():
+        return []
+
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for line in failed_path.read_text(encoding='utf-8').splitlines():
+        raw_path, separator, _error = line.partition('\t')
+        if not separator or not raw_path.strip():
+            continue
+        audio_path = Path(raw_path.strip()).expanduser().resolve()
+        if audio_path.suffix.lower() not in AUDIO_EXTENSIONS:
+            continue
+        key = str(audio_path).casefold()
+        if key not in seen:
+            seen.add(key)
+            paths.append(audio_path)
+    return paths
 
 
 def _safe_print(message: str) -> None:

@@ -56,6 +56,11 @@ def main() -> int:
         print(f'?????: total={summary.total}, succeeded={summary.succeeded}, skipped={summary.skipped}, failed={summary.failed}')
         return 0 if summary.failed == 0 else 1
 
+    if args.command == 'retry-failed':
+        summary = run_retry_failed(config, overwrite=args.overwrite)
+        print(f'retry summary: total={summary.total}, succeeded={summary.succeeded}, skipped={summary.skipped}, failed={summary.failed}')
+        return 0 if summary.failed == 0 else 1
+
     parser.error(f'unsupported command: {args.command}')
     return 2
 
@@ -73,6 +78,9 @@ def build_parser() -> argparse.ArgumentParser:
     batch_parser = subparsers.add_parser('run-batch')
     batch_parser.add_argument('roots', nargs='+', help='One or more root folders to scan recursively')
     batch_parser.add_argument('--overwrite', action='store_true')
+
+    retry_parser = subparsers.add_parser('retry-failed')
+    retry_parser.add_argument('--overwrite', action='store_true')
     return parser
 
 
@@ -127,6 +135,11 @@ def run_single(audio_path: Path, config: dict[str, Any], *, overwrite: bool) -> 
 def run_batch(roots: list[Path], config: dict[str, Any], *, overwrite: bool):
     processor = BatchProcessor(config, lambda audio_path, overwrite=False: run_single(audio_path, config, overwrite=overwrite))
     return processor.run(roots, overwrite=overwrite)
+
+
+def run_retry_failed(config: dict[str, Any], *, overwrite: bool):
+    processor = BatchProcessor(config, lambda audio_path, overwrite=False: run_single(audio_path, config, overwrite=overwrite))
+    return processor.retry_failed(overwrite=overwrite)
 
 
 def run_transcribe(audio_path: Path, config: dict[str, Any], *, overwrite: bool) -> Path:

@@ -136,6 +136,16 @@ python -B app.py run-batch "C:\Users\YANG\Music\arsm.one" "E:\arsm" "E:\smar"
 
 批处理会递归寻找音频文件。为避免相同文件名的多个音频输出冲突，同一目录同一文件名的不同格式会按优先级去重，优先处理 `wav`，再到 `flac`、`m4a`、`aac`、`mp3` 等格式。
 
+### 仅重试失败文件
+
+当 LM Studio 暂停、网络端口异常等问题修复后，无需重新扫描整个音频库：
+
+```powershell
+python -B app.py retry-failed
+```
+
+该命令会读取 `logs/failed.txt` 中的音频路径、自动去重，并备份旧清单为 `logs/failed.before_retry.txt`。本次仍失败的文件会写回新的 `logs/failed.txt`；成功或已跳过的项目会从当前失败清单移除。除非要强制重做已有结果，否则不要添加 `--overwrite`。
+
 ### 分阶段重跑
 
 适合只想调整某一个步骤的情况：

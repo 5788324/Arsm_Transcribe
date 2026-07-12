@@ -4,8 +4,14 @@
 - 在 `G:\Codex\arsm转录` 初始化独立 Git 仓库，将当前可复现的源码、配置与两份项目文档推送到 `https://github.com/5788324/Arsm_Transcribe`。
 - 排除运行缓存、日志、模型与打包产物，避免把机器相关的大文件或用户音频误上传到公开仓库。
 
-**当前状态**
-- 已创建 `.gitignore`，尚未创建提交或推送；完成后需补充提交号与远程推送结果。
+**完成结果**
+- 建立独立 Git 仓库并添加远程 `origin`：`https://github.com/5788324/Arsm_Transcribe.git`。
+- 已提交并推送 `d27f7e4 feat: add local ASR to Chinese LRC pipeline` 到远程 `main` 分支。
+- 已确认远程仓库推送前为空；未覆盖任何已有内容。
+
+**踩坑记录 / 下一步**
+- `G:` 盘根目录属于 SYSTEM，Git 向上查找时会触发 dubious ownership；本项目已创建独立 `.git`，后续在项目目录执行 Git 即可。
+- GitHub 仓库目前已具备源码快照。后续修改完成后按常规 `git add`、`git commit`、`git push` 同步。
 
 ---
 ### 2026-06-23 01:08 - AI: Codex - ??: ????????????? EXE ?, ?????????

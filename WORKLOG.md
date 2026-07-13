@@ -1,3 +1,26 @@
+### 2026-07-13 - AI: Codex - 只读盘点 E:\arsm 的音频与字幕资源
+
+**打算做什么 / 为什么**
+- 对 `E:\arsm` 做只读资源盘点，区分需要 ASR 的音频、可从已有 VTT/SRT/日文 LRC 直接翻译的音频、已有可跳过 LRC 的音频，以及仅有 TXT/PDF 参考文本的目录。
+- 生成可核对的清单到项目 `logs/`，不修改 `E:\arsm` 内任何文件，不启动模型或批处理。
+
+**实际完成（只读）**
+- 以项目的媒体去重逻辑盘点到 8544 个可处理媒体：WAV 4804、MP3 3210、MP4 525、FLAC 5；此前 8086 是未包含 MP4 的狭义音频统计。
+- 生成完整清单：`logs/arsm_inventory.json`、`logs/arsm_inventory.csv`、`logs/arsm_timed_subtitle_pairing.json`、`logs/arsm_full_filename_subtitle_analysis.json`、`logs/arsm_processing_plan.json`、`logs/arsm_processing_plan.csv`。
+- 最终建议处理计划：
+  - 3342 个：`音频完整文件名.vtt` 为中文或非日文，可直接转中文 LRC，不应 ASR 或再翻译。
+  - 208 个：`音频完整文件名.vtt` 为日文，应保留时间轴并只走翻译。
+  - 1 个：现有日文 LRC，应只走翻译。
+  - 108 个：已有中文、本项目或未知 LRC，默认跳过，避免覆盖。
+  - 146 个：仍需 ASR，但同目录有 TXT/PDF，可作校对参考；TXT/PDF 没有逐句时间轴，不能直接生成 LRC。
+  - 4739 个：无可用字幕，需完整 ASR → 清洗 → 翻译 → LRC。
+- 发现当前代码只识别 `音频去扩展名.vtt`，但库中大量字幕实际命名为 `音频.wav.vtt` / `音频.mp3.vtt`；477 个目录同时有音频与定时字幕，其中 445 个目录音频数与字幕数相同且文件名仅差原音频扩展名。这是明确的功能缺口，但本轮按只读分析要求未改代码。
+
+**下一步建议**
+- 在 `modules/subtitle_sources.py` 安全扩展字幕匹配：优先识别 `audio.name + '.vtt'` / `.srt`，再保留旧的 stem 匹配。先用少量目录抽样验证后再批量使用。
+- 对“中文或非日文”VTT 增加直接 VTT→中文 LRC 的路径，避免把中文再次发送给翻译模型；日文 VTT 才送入翻译。
+
+---
 ### 2026-07-13 - AI: Codex - 暂停 LM Studio 排查并确认主音频库目录
 
 **实际确认**

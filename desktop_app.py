@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
@@ -20,6 +21,13 @@ STATUS_PATH = LOG_DIR / 'batch_status.json'
 RUNNER_PATH = LOG_DIR / 'batch_runner.json'
 STDOUT_LOG = LOG_DIR / 'gui_batch_stdout.log'
 STDERR_LOG = LOG_DIR / 'gui_batch_stderr.log'
+
+
+def probe_translation_service(base_url: str, timeout_seconds: int = 3) -> int:
+    url = f"{base_url.rstrip('/')}/models"
+    with request.urlopen(url, timeout=timeout_seconds) as response:
+        payload = json.loads(response.read().decode('utf-8'))
+    return len(payload.get('data', [])) if isinstance(payload, dict) else 0
 
 
 def main() -> int:
@@ -172,6 +180,7 @@ class DesktopLauncher:
         ttk.Button(actions, text='仅重试失败项', style='Soft.TButton', command=self._start_retry_failed).pack(side='left', padx=8)
         ttk.Button(actions, text='刷新进度', style='Soft.TButton', command=self._refresh_status).pack(side='left', padx=8)
         ttk.Button(actions, text='打开日志', style='Soft.TButton', command=lambda: self._open_path(LOG_DIR)).pack(side='left')
+        ttk.Button(actions, text='查看失败清单', style='Soft.TButton', command=self._open_failed_log).pack(side='left', padx=8)
         ttk.Button(actions, text='检查翻译服务', style='Soft.TButton', command=self._check_translation_service).pack(side='left', padx=8)
 
         actions2 = ttk.Frame(card, style='Card.TFrame')
@@ -212,20 +221,44 @@ class DesktopLauncher:
             ttk.Label(row, text=label, style='CardBody.TLabel').pack(anchor='w')
             ttk.Label(row, text=value, style='CardBody.TLabel', wraplength=420).pack(anchor='w', pady=(2, 0))
 
-    def _check_translation_service(self, *, silent: bool = False) -> None:
+    def _check_translation_service(self, *, silent: bool = False, callback: Any | None = None) -> None:
         base_url = str(self.config.get('translate', {}).get('base_url', '')).rstrip('/')
-        url = f'{base_url}/models' if base_url else ''
-        try:
-            with request.urlopen(url, timeout=3) as response:
-                payload = json.loads(response.read().decode('utf-8'))
-            models = payload.get('data', []) if isinstance(payload, dict) else []
-            self.service_var.set(f'翻译服务：可用，检测到 {len(models)} 个模型')
+        if not base_url:
+            self._apply_translation_service_result(False, 0, ValueError('config.yaml 缺少翻译服务地址'), silent, callback)
+            return
+
+        self.service_var.set('翻译服务：正在检查…')
+
+        def worker() -> None:
+            try:
+                count = probe_translation_service(base_url)
+            except Exception as exc:
+                self.root.after(0, lambda error=exc: self._apply_translation_service_result(False, 0, error, silent, callback))
+            else:
+                self.root.after(0, lambda: self._apply_translation_service_result(True, count, None, silent, callback))
+
+        threading.Thread(target=worker, name='translation-service-probe', daemon=True).start()
+
+    def _apply_translation_service_result(
+        self,
+        available: bool,
+        model_count: int,
+        error: Exception | None,
+        silent: bool,
+        callback: Any | None,
+    ) -> None:
+        base_url = str(self.config.get('translate', {}).get('base_url', '')).rstrip('/')
+        if available:
+            self.service_var.set(f'翻译服务：可用，检测到 {model_count} 个模型')
             if not silent:
-                messagebox.showinfo('翻译服务可用', f'已连接：{base_url}\n可见模型数量：{len(models)}')
-        except Exception as exc:
+                messagebox.showinfo('翻译服务可用', f'已连接：{base_url}\n可见模型数量：{model_count}')
+        else:
             self.service_var.set('翻译服务：不可用，请启动 LM Studio 或检查配置')
             if not silent:
-                messagebox.showwarning('翻译服务不可用', f'无法连接：{base_url}\n\n{type(exc).__name__}: {exc}')
+                detail = '' if error is None else f'\n\n{type(error).__name__}: {error}'
+                messagebox.showwarning('翻译服务不可用', f'无法连接：{base_url}{detail}')
+        if callback is not None:
+            callback(available)
 
     def _add_root(self) -> None:
         selected = filedialog.askdirectory(title='选择要处理的目录')
@@ -259,7 +292,24 @@ class DesktopLauncher:
         if self._runner_is_alive():
             messagebox.showinfo('任务正在运行', '已有后台任务正在处理，请等待它结束后再启动新任务。')
             return
+        if bool(self.config.get('translate', {}).get('enabled', True)):
+            self._check_translation_service(
+                silent=True,
+                callback=lambda available: self._continue_start_after_service_check(available, roots, retry_failed),
+            )
+            return
+        self._launch_background_worker(roots, retry_failed)
 
+    def _continue_start_after_service_check(self, available: bool, roots: list[str], retry_failed: bool) -> None:
+        if not available:
+            messagebox.showwarning(
+                '未启动任务',
+                '翻译服务当前不可用。请先启动 LM Studio 并点击“检查翻译服务”，确认可用后再开始批处理。',
+            )
+            return
+        self._launch_background_worker(roots, retry_failed)
+
+    def _launch_background_worker(self, roots: list[str], retry_failed: bool) -> None:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         if getattr(sys, 'frozen', False):
             command = [sys.executable, '--batch-worker', '--config', str(self.config_path)]
@@ -356,6 +406,13 @@ class DesktopLauncher:
         except Exception:
             return False
         return str(int(pid)) in completed.stdout
+
+    def _open_failed_log(self) -> None:
+        failed_path = LOG_DIR / 'failed.txt'
+        if not failed_path.exists():
+            messagebox.showinfo('暂无失败清单', '尚未生成 failed.txt，当前没有可查看的失败记录。')
+            return
+        os.startfile(str(failed_path))
 
     def _open_path(self, path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)

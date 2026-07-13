@@ -10,6 +10,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
+from urllib import request
 
 import app as pipeline_app
 
@@ -60,18 +61,20 @@ class DesktopLauncher:
         self.config_path = config_path
         self.config = pipeline_app.load_config(config_path)
         self.root = tk.Tk()
-        self.root.title('RJ-LRC Local')
+        self.root.title('RJ-LRC 本地字幕工坊')
         self.root.geometry('1180x760')
         self.root.minsize(1080, 700)
         self.root.configure(bg='#eef5ff')
 
-        self.status_var = tk.StringVar(value='Idle')
+        self.status_var = tk.StringVar(value='任务状态：等待开始')
         self.progress_var = tk.DoubleVar(value=0.0)
-        self.summary_var = tk.StringVar(value='No batch status yet')
-        self.current_var = tk.StringVar(value='Current file: -')
+        self.summary_var = tk.StringVar(value='尚无批处理记录')
+        self.current_var = tk.StringVar(value='当前文件：-')
         self.model_var = tk.StringVar(value=str(self.config.get('translate', {}).get('model', '')))
-        self.output_var = tk.StringVar(value='Primary output: same-name Chinese .lrc')
-        self.pid_var = tk.StringVar(value='Background task: not started')
+        self.progress_text_var = tk.StringVar(value='进度：-')
+        self.service_var = tk.StringVar(value='翻译服务：尚未检查')
+        self.output_var = tk.StringVar(value='主输出：音频同名中文 .lrc')
+        self.pid_var = tk.StringVar(value='后台任务：未启动')
         self.overwrite_var = tk.BooleanVar(value=False)
 
         self.roots: list[str] = [r'E:\arsm']
@@ -79,6 +82,7 @@ class DesktopLauncher:
         self._build_styles()
         self._build_ui()
         self._refresh_status()
+        self.root.after(400, self._check_translation_service)
 
     def run(self) -> None:
         self.root.mainloop()
@@ -111,8 +115,8 @@ class DesktopLauncher:
 
         header = ttk.Frame(outer, style='Hero.TFrame')
         header.pack(fill='x', pady=(0, 18))
-        ttk.Label(header, text='RJ-LRC Local', style='Title.TLabel').pack(anchor='w')
-        ttk.Label(header, text='Local ASR / translation / subtitle batching workstation', style='Subtitle.TLabel').pack(anchor='w', pady=(4, 0))
+        ttk.Label(header, text='RJ-LRC 本地字幕工坊', style='Title.TLabel').pack(anchor='w')
+        ttk.Label(header, text='本地转录、中文翻译、LRC 生成与批量恢复工具', style='Subtitle.TLabel').pack(anchor='w', pady=(4, 0))
 
         content = ttk.Frame(outer, style='Hero.TFrame')
         content.pack(fill='both', expand=True)
@@ -143,8 +147,8 @@ class DesktopLauncher:
     def _build_roots_card(self, parent: ttk.Frame) -> None:
         card = ttk.Frame(parent, style='Card.TFrame', padding=18)
         card.pack(fill='both', expand=True, pady=(0, 12))
-        ttk.Label(card, text='Batch Status', style='CardTitle.TLabel').pack(anchor='w')
-        ttk.Label(card, text='Choose one or more library roots. Default starts with E:\arsm.', style='CardBody.TLabel').pack(anchor='w', pady=(4, 12))
+        ttk.Label(card, text='处理目录', style='CardTitle.TLabel').pack(anchor='w')
+        ttk.Label(card, text='添加需要扫描的音频根目录。默认目录是 E:\\arsm。', style='CardBody.TLabel').pack(anchor='w', pady=(4, 12))
 
         self.root_list = tk.Listbox(card, font=('Microsoft YaHei UI', 10), relief='flat', bg='#f8fbff', fg='#284066', selectbackground='#d8e8ff', selectforeground='#20304f', height=12)
         self.root_list.pack(fill='both', expand=True)
@@ -153,34 +157,36 @@ class DesktopLauncher:
 
         row = ttk.Frame(card, style='Card.TFrame')
         row.pack(fill='x', pady=(12, 0))
-        ttk.Button(row, text='Add Folder', style='Soft.TButton', command=self._add_root).pack(side='left')
-        ttk.Button(row, text='Remove Selected', style='Soft.TButton', command=self._remove_selected_root).pack(side='left', padx=8)
-        ttk.Button(row, text='Clear', style='Soft.TButton', command=self._clear_roots).pack(side='left')
+        ttk.Button(row, text='添加目录', style='Soft.TButton', command=self._add_root).pack(side='left')
+        ttk.Button(row, text='移除选中项', style='Soft.TButton', command=self._remove_selected_root).pack(side='left', padx=8)
+        ttk.Button(row, text='清空', style='Soft.TButton', command=self._clear_roots).pack(side='left')
 
     def _build_actions_card(self, parent: ttk.Frame) -> None:
         card = ttk.Frame(parent, style='Card.TFrame', padding=18)
         card.pack(fill='x')
-        ttk.Label(card, text='Actions', style='CardTitle.TLabel').pack(anchor='w')
+        ttk.Label(card, text='开始处理', style='CardTitle.TLabel').pack(anchor='w')
 
         actions = ttk.Frame(card, style='Card.TFrame')
         actions.pack(fill='x', pady=(12, 10))
-        ttk.Button(actions, text='Start Background Batch', style='Primary.TButton', command=self._start_batch).pack(side='left')
-        ttk.Button(actions, text='Retry Failed', style='Soft.TButton', command=self._start_retry_failed).pack(side='left', padx=8)
-        ttk.Button(actions, text='Refresh', style='Soft.TButton', command=self._refresh_status).pack(side='left', padx=8)
-        ttk.Button(actions, text='Open Logs', style='Soft.TButton', command=lambda: self._open_path(LOG_DIR)).pack(side='left')
+        ttk.Button(actions, text='开始批量处理', style='Primary.TButton', command=self._start_batch).pack(side='left')
+        ttk.Button(actions, text='仅重试失败项', style='Soft.TButton', command=self._start_retry_failed).pack(side='left', padx=8)
+        ttk.Button(actions, text='刷新进度', style='Soft.TButton', command=self._refresh_status).pack(side='left', padx=8)
+        ttk.Button(actions, text='打开日志', style='Soft.TButton', command=lambda: self._open_path(LOG_DIR)).pack(side='left')
+        ttk.Button(actions, text='检查翻译服务', style='Soft.TButton', command=self._check_translation_service).pack(side='left', padx=8)
 
         actions2 = ttk.Frame(card, style='Card.TFrame')
         actions2.pack(fill='x')
-        ttk.Button(actions2, text='Build EXE', style='Soft.TButton', command=self._build_exe).pack(side='left')
-        ttk.Button(actions2, text='Open Dist', style='Soft.TButton', command=lambda: self._open_path(REPO_ROOT / 'dist')).pack(side='left', padx=8)
-        ttk.Checkbutton(actions2, text='Overwrite', variable=self.overwrite_var).pack(side='left', padx=(12, 0))
+        ttk.Button(actions2, text='构建 EXE', style='Soft.TButton', command=self._build_exe).pack(side='left')
+        ttk.Button(actions2, text='打开 EXE 目录', style='Soft.TButton', command=lambda: self._open_path(REPO_ROOT / 'dist')).pack(side='left', padx=8)
+        ttk.Checkbutton(actions2, text='强制覆盖已有结果', variable=self.overwrite_var).pack(side='left', padx=(12, 0))
 
     def _build_status_card(self, parent: ttk.Frame) -> None:
         card = ttk.Frame(parent, style='Card.TFrame', padding=18)
         card.pack(fill='x', pady=(0, 12))
-        ttk.Label(card, text='Batch Status', style='CardTitle.TLabel').pack(anchor='w')
+        ttk.Label(card, text='批处理状态', style='CardTitle.TLabel').pack(anchor='w')
         ttk.Label(card, textvariable=self.status_var, style='CardBody.TLabel').pack(anchor='w', pady=(6, 2))
         ttk.Label(card, textvariable=self.summary_var, style='CardBody.TLabel').pack(anchor='w', pady=(0, 2))
+        ttk.Label(card, textvariable=self.progress_text_var, style='CardBody.TLabel').pack(anchor='w', pady=(0, 2))
         ttk.Label(card, textvariable=self.current_var, style='CardBody.TLabel', wraplength=420).pack(anchor='w', pady=(0, 8))
         ttk.Progressbar(card, variable=self.progress_var, maximum=100, style='Water.Horizontal.TProgressbar').pack(fill='x', pady=(4, 8))
         ttk.Label(card, textvariable=self.pid_var, style='CardBody.TLabel').pack(anchor='w')
@@ -188,15 +194,17 @@ class DesktopLauncher:
     def _build_runtime_card(self, parent: ttk.Frame) -> None:
         card = ttk.Frame(parent, style='Card.TFrame', padding=18)
         card.pack(fill='both', expand=True)
-        ttk.Label(card, text='Runtime Settings', style='CardTitle.TLabel').pack(anchor='w')
+        ttk.Label(card, text='当前配置', style='CardTitle.TLabel').pack(anchor='w')
+
+        ttk.Label(card, textvariable=self.service_var, style='CardBody.TLabel', wraplength=420).pack(anchor='w', pady=(8, 8))
 
         rows = [
-            ('Config file', str(self.config_path)),
-            ('Translate model', self.model_var.get() or '-'),
-            ('Output mode', self.output_var.get()),
-            ('LM Studio', str(self.config.get('translate', {}).get('base_url', ''))),
-            ('ASR backend', str(self.config.get('asr', {}).get('backend', ''))),
-            ('ASR executable', str(self.config.get('asr', {}).get('faster_whisper', {}).get('runner', {}).get('executable_path', ''))),
+            ('配置文件', str(self.config_path)),
+            ('翻译模型', self.model_var.get() or '-'),
+            ('输出方式', self.output_var.get()),
+            ('LM Studio 地址', str(self.config.get('translate', {}).get('base_url', ''))),
+            ('转录后端', str(self.config.get('asr', {}).get('backend', ''))),
+            ('转录程序', str(self.config.get('asr', {}).get('faster_whisper', {}).get('runner', {}).get('executable_path', ''))),
         ]
         for label, value in rows:
             row = ttk.Frame(card, style='Card.TFrame')
@@ -204,8 +212,23 @@ class DesktopLauncher:
             ttk.Label(row, text=label, style='CardBody.TLabel').pack(anchor='w')
             ttk.Label(row, text=value, style='CardBody.TLabel', wraplength=420).pack(anchor='w', pady=(2, 0))
 
+    def _check_translation_service(self, *, silent: bool = False) -> None:
+        base_url = str(self.config.get('translate', {}).get('base_url', '')).rstrip('/')
+        url = f'{base_url}/models' if base_url else ''
+        try:
+            with request.urlopen(url, timeout=3) as response:
+                payload = json.loads(response.read().decode('utf-8'))
+            models = payload.get('data', []) if isinstance(payload, dict) else []
+            self.service_var.set(f'翻译服务：可用，检测到 {len(models)} 个模型')
+            if not silent:
+                messagebox.showinfo('翻译服务可用', f'已连接：{base_url}\n可见模型数量：{len(models)}')
+        except Exception as exc:
+            self.service_var.set('翻译服务：不可用，请启动 LM Studio 或检查配置')
+            if not silent:
+                messagebox.showwarning('翻译服务不可用', f'无法连接：{base_url}\n\n{type(exc).__name__}: {exc}')
+
     def _add_root(self) -> None:
-        selected = filedialog.askdirectory(title='Choose batch root folder')
+        selected = filedialog.askdirectory(title='选择要处理的目录')
         if not selected:
             return
         if selected not in self.roots:
@@ -231,10 +254,10 @@ class DesktopLauncher:
     def _start_background_worker(self, *, retry_failed: bool) -> None:
         roots = list(self.root_list.get(0, 'end'))
         if not retry_failed and not roots:
-            messagebox.showwarning('No folders', 'Please add at least one folder to process.')
+            messagebox.showwarning('未选择目录', '请先添加至少一个需要处理的目录。')
             return
         if self._runner_is_alive():
-            messagebox.showinfo('Already running', 'A background batch is already running. Wait for it to finish first.')
+            messagebox.showinfo('任务正在运行', '已有后台任务正在处理，请等待它结束后再启动新任务。')
             return
 
         LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -269,8 +292,8 @@ class DesktopLauncher:
             'overwrite': self.overwrite_var.get(),
         }
         RUNNER_PATH.write_text(json.dumps(runner_payload, ensure_ascii=False, indent=2), encoding='utf-8')
-        self.pid_var.set(f'Background PID: {process.pid}')
-        self.status_var.set('Retrying failed files' if retry_failed else 'Background batch started')
+        self.pid_var.set(f'后台任务 PID：{process.pid}')
+        self.status_var.set('任务状态：正在重试失败文件' if retry_failed else '任务状态：已启动批量处理')
         self.root.after(1000, self._refresh_status)
 
     def _refresh_status(self) -> None:
@@ -281,34 +304,41 @@ class DesktopLauncher:
             completed = int(payload.get('current_index', 0) or 0)
             progress = 0 if total <= 0 else completed / total * 100
             self.progress_var.set(progress)
-            self.status_var.set(f"State: {payload.get('state', 'unknown')}")
+            state = str(payload.get('state', 'unknown'))
+            state_label = {'scanning': '正在扫描目录', 'running': '正在处理', 'completed': '已完成'}.get(state, state)
+            mode = str(payload.get('mode', 'full_scan'))
+            mode_label = '失败重试' if mode == 'retry_failed' else '全库批处理'
+            self.status_var.set(f'任务状态：{state_label}')
             self.summary_var.set(
-                f"Progress {completed}/{total} | Succeeded {payload.get('succeeded', 0)} | Skipped {payload.get('skipped', 0)} | Failed {payload.get('failed', 0)}"
+                f'{mode_label} | 成功 {payload.get("succeeded", 0)} | 跳过 {payload.get("skipped", 0)} | 失败 {payload.get("failed", 0)}'
             )
+            self.progress_text_var.set(f'进度：{completed}/{total}（{progress:.1f}%）' if total else f'已扫描：{completed} 个文件')
             current = payload.get('current_audio_path') or '-'
-            self.current_var.set(f'Current file: {current}')
+            self.current_var.set(f'当前文件：{current}')
         else:
             self.progress_var.set(0)
-            self.summary_var.set('No batch status yet')
-            self.current_var.set('Current file: -')
+            self.status_var.set('任务状态：等待开始')
+            self.summary_var.set('尚无批处理记录')
+            self.progress_text_var.set('进度：-')
+            self.current_var.set('当前文件：-')
 
         if runner and self._runner_is_alive(runner.get('pid')):
-            self.pid_var.set(f"Background PID: {runner.get('pid')}")
+            self.pid_var.set(f'后台任务 PID：{runner.get("pid")}')
         elif runner:
-            self.pid_var.set(f"Background task ended, last PID: {runner.get('pid')}")
+            self.pid_var.set(f'后台任务已结束，最后 PID：{runner.get("pid")}')
         else:
-            self.pid_var.set('Background task: not started')
+            self.pid_var.set('后台任务：未启动')
 
         self.root.after(2000, self._refresh_status)
 
     def _build_exe(self) -> None:
         if getattr(sys, 'frozen', False):
-            messagebox.showinfo('Already an EXE', 'The current process is already a packaged executable.')
+            messagebox.showinfo('当前已是 EXE', '当前程序已经是打包后的 EXE。')
             return
         command = [sys.executable, str(REPO_ROOT / 'build_exe.py')]
         creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
         subprocess.Popen(command, cwd=str(REPO_ROOT), creationflags=creationflags)
-        messagebox.showinfo('Build started', 'PyInstaller started in the background. Check the dist folder later.')
+        messagebox.showinfo('已开始构建', 'EXE 正在后台构建，请稍后查看 dist 目录。')
 
     def _runner_is_alive(self, pid: Any | None = None) -> bool:
         if pid is None:

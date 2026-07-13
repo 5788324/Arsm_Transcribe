@@ -1,10 +1,12 @@
-# Runtime outputs and machine-specific data
+﻿# Runtime outputs and machine-specific data
 cache/
 logs/
 build/
 dist/
 input/
 output/
+data/
+tests/.tmp/
 
 # Ad hoc verification data
 tmp_*/

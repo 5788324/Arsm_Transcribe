@@ -1,6 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,25 +11,17 @@ from modules.asr.faster_whisper_backend import FasterWhisperBackend
 from modules.asr.qwen3_asr_backend import Qwen3ASRBackend
 from modules.batch import BatchProcessor
 from modules.io_utils import (
-    bilingual_lrc_path,
-    clean_transcript_path,
-    is_valid_json_file,
-    ja_lrc_path,
-    primary_lrc_path,
-    raw_transcript_path,
-    translated_transcript_path,
-    zh_lrc_path,
+    bilingual_lrc_path, clean_transcript_path, dump_json, is_valid_json_file,
+    ja_lrc_path, load_json, primary_lrc_path, primary_vtt_path,
+    raw_transcript_path, translated_transcript_path, zh_lrc_path, zh_vtt_path,
 )
 from modules.lrc_writer import LRCWriter
 from modules.segment_cleaner import SegmentCleaner
 from modules.subtitle_sources import SubtitleImporter, select_subtitle_strategy
 from modules.translate import Translator
+from modules.vtt_writer import VTTWriter
 
-
-BACKENDS = {
-    'faster_whisper': FasterWhisperBackend,
-    'qwen3_asr': Qwen3ASRBackend,
-}
+BACKENDS = {'faster_whisper': FasterWhisperBackend, 'qwen3_asr': Qwen3ASRBackend}
 
 
 def main() -> int:
@@ -49,181 +42,194 @@ def main() -> int:
         run_translate(Path(args.audio), config, overwrite=args.overwrite)
         return 0
     if args.command == 'write-lrc':
-        run_write_lrc(Path(args.audio), config, overwrite=args.overwrite)
+        run_write_subtitles(Path(args.audio), config, overwrite=args.overwrite)
         return 0
     if args.command == 'run-batch':
         summary = run_batch([Path(value) for value in args.roots], config, overwrite=args.overwrite)
-        print(f'?????: total={summary.total}, succeeded={summary.succeeded}, skipped={summary.skipped}, failed={summary.failed}')
+        print(f'batch summary: total={summary.total}, succeeded={summary.succeeded}, skipped={summary.skipped}, failed={summary.failed}')
         return 0 if summary.failed == 0 else 1
-
     if args.command == 'retry-failed':
         summary = run_retry_failed(config, overwrite=args.overwrite)
         print(f'retry summary: total={summary.total}, succeeded={summary.succeeded}, skipped={summary.skipped}, failed={summary.failed}')
         return 0 if summary.failed == 0 else 1
-
+    if args.command in {'scan', 'plan', 'status', 'cancel', 'doctor'}:
+        from modules.engine import EngineService
+        service = EngineService(config)
+        if args.command == 'scan':
+            result = service.scan([Path(value) for value in args.roots])
+        elif args.command == 'plan':
+            result = service.plan([Path(value) for value in args.roots])
+        elif args.command == 'status':
+            result = service.status()
+        elif args.command == 'cancel':
+            result = service.cancel()
+        else:
+            result = service.doctor()
+        _emit_result(result, Path(args.output) if getattr(args, 'output', None) else None)
+        return 0 if result.get('ok', False) else 2
     parser.error(f'unsupported command: {args.command}')
     return 2
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description='RJ transcript to bilingual LRC pipeline')
+    parser = argparse.ArgumentParser(description='Local RJ audio to Chinese LRC/VTT pipeline')
     parser.add_argument('--config', default='config.yaml', help='Path to config.yaml')
     subparsers = parser.add_subparsers(dest='command', required=True)
-
     for command_name in ('run-single', 'transcribe', 'clean', 'translate', 'write-lrc'):
         subparser = subparsers.add_parser(command_name)
-        subparser.add_argument('audio', help='Path to one audio file')
+        subparser.add_argument('audio')
         subparser.add_argument('--overwrite', action='store_true')
-
     batch_parser = subparsers.add_parser('run-batch')
-    batch_parser.add_argument('roots', nargs='+', help='One or more root folders to scan recursively')
+    batch_parser.add_argument('roots', nargs='+')
     batch_parser.add_argument('--overwrite', action='store_true')
-
     retry_parser = subparsers.add_parser('retry-failed')
     retry_parser.add_argument('--overwrite', action='store_true')
+    for command_name in ('scan', 'plan'):
+        subparser = subparsers.add_parser(command_name)
+        subparser.add_argument('roots', nargs='+')
+        subparser.add_argument('--output')
+    for command_name in ('status', 'cancel', 'doctor'):
+        subparser = subparsers.add_parser(command_name)
+        subparser.add_argument('--output')
     return parser
 
 
 def load_config(path: Path) -> dict[str, Any]:
-    with path.open('r', encoding='utf-8') as handle:
+    with path.open('r', encoding='utf-8-sig') as handle:
         return yaml.safe_load(handle) or {}
 
 
 def run_single(audio_path: Path, config: dict[str, Any], *, overwrite: bool) -> str:
-    resolved_audio_path = audio_path.expanduser().resolve()
-    raw_json_path = raw_transcript_path(_cache_dir(config), resolved_audio_path)
-    clean_json_path = clean_transcript_path(_cache_dir(config), resolved_audio_path)
-    translated_json_path = translated_transcript_path(_cache_dir(config), resolved_audio_path)
-    primary_path, ja_path, zh_path, bilingual_path = _lrc_targets(resolved_audio_path, config)
+    audio = audio_path.expanduser().resolve()
+    raw_json = raw_transcript_path(_cache_dir(config), audio)
+    clean_json = clean_transcript_path(_cache_dir(config), audio)
+    translated_json = translated_transcript_path(_cache_dir(config), audio)
+    lrc_targets = _lrc_targets(audio, config)
+    vtt_targets = _vtt_targets(audio, config)
+    strategy = select_subtitle_strategy(audio, overwrite=overwrite)
 
-    strategy = select_subtitle_strategy(resolved_audio_path, overwrite=overwrite)
     if strategy['action'] == 'skip_existing_lrc' and not overwrite:
         return 'skipped'
+    if strategy['action'] == 'manual_review':
+        raise RuntimeError(f"manual review required: {strategy['reason']} ({strategy['source_path']})")
 
     writer = LRCWriter()
-    planned_outputs = writer.planned_outputs(
-        primary_path,
-        ja_path,
-        zh_path,
-        bilingual_path,
+    planned_lrc = writer.planned_outputs(
+        *lrc_targets,
         emit_ja=bool(config.get('lrc', {}).get('emit_ja_lrc', False)),
         emit_zh=bool(config.get('lrc', {}).get('emit_zh_lrc', False)),
         emit_bilingual=bool(config.get('lrc', {}).get('emit_bilingual_lrc', False)),
     )
-    outputs_exist = (
-        is_valid_json_file(raw_json_path)
-        and is_valid_json_file(clean_json_path)
-        and is_valid_json_file(translated_json_path)
-        and all(path.exists() for path in planned_outputs)
-    )
-    if outputs_exist and not overwrite:
+    if not overwrite and all(is_valid_json_file(path) for path in (raw_json, clean_json, translated_json)) and all(path.exists() for path in planned_lrc) and any(path.exists() for path in vtt_targets):
         return 'skipped'
 
-    if strategy['action'] == 'translate_existing_subtitle':
-        importer = SubtitleImporter()
+    source_path: Path | None = None
+    if strategy['action'] in {'translate_existing_subtitle', 'convert_existing_subtitle'}:
         source_path = Path(strategy['source_path'])
-        raw_path = importer.import_to_raw_json(resolved_audio_path, source_path, raw_json_path, overwrite=overwrite)
+        raw_path = SubtitleImporter().import_to_raw_json(audio, source_path, raw_json, overwrite=overwrite)
     else:
-        raw_path = run_transcribe(resolved_audio_path, config, overwrite=overwrite)
-
-    clean_path = run_clean(resolved_audio_path, config, overwrite=overwrite, raw_path=raw_path)
-    translated_path = run_translate(resolved_audio_path, config, overwrite=overwrite, clean_path=clean_path)
-    run_write_lrc(resolved_audio_path, config, overwrite=overwrite, translated_path=translated_path)
+        raw_path = run_transcribe(audio, config, overwrite=overwrite)
+    clean_path = run_clean(audio, config, overwrite=overwrite, raw_path=raw_path)
+    if strategy['action'] == 'convert_existing_subtitle':
+        translated_path = _copy_as_chinese_translation(clean_path, translated_json, overwrite=overwrite)
+    else:
+        translated_path = run_translate(audio, config, overwrite=overwrite, clean_path=clean_path)
+    run_write_subtitles(audio, config, overwrite=overwrite, translated_path=translated_path, source_path=source_path)
     return 'processed'
 
 
 def run_batch(roots: list[Path], config: dict[str, Any], *, overwrite: bool):
-    processor = BatchProcessor(config, lambda audio_path, overwrite=False: run_single(audio_path, config, overwrite=overwrite))
-    return processor.run(roots, overwrite=overwrite)
+    return BatchProcessor(config, lambda path, overwrite=False: run_single(path, config, overwrite=overwrite)).run(roots, overwrite=overwrite)
 
 
 def run_retry_failed(config: dict[str, Any], *, overwrite: bool):
-    processor = BatchProcessor(config, lambda audio_path, overwrite=False: run_single(audio_path, config, overwrite=overwrite))
-    return processor.retry_failed(overwrite=overwrite)
+    return BatchProcessor(config, lambda path, overwrite=False: run_single(path, config, overwrite=overwrite)).retry_failed(overwrite=overwrite)
 
 
 def run_transcribe(audio_path: Path, config: dict[str, Any], *, overwrite: bool) -> Path:
-    audio_path = audio_path.expanduser().resolve()
+    audio = audio_path.expanduser().resolve()
     backend_name = config.get('asr', {}).get('backend', 'faster_whisper')
     backend_cls = BACKENDS.get(backend_name)
     if backend_cls is None:
         raise ValueError(f'unsupported ASR backend: {backend_name}')
-
-    output_path = raw_transcript_path(_cache_dir(config), audio_path)
-    backend = backend_cls()
-    return backend.transcribe_to_json(audio_path, output_path, config, overwrite=overwrite)
+    return backend_cls().transcribe_to_json(audio, raw_transcript_path(_cache_dir(config), audio), config, overwrite=overwrite)
 
 
-def run_clean(
-    audio_path: Path,
-    config: dict[str, Any],
-    *,
-    overwrite: bool,
-    raw_path: Path | None = None,
-) -> Path:
-    audio_path = audio_path.expanduser().resolve()
-    raw_json_path = raw_path or raw_transcript_path(_cache_dir(config), audio_path)
-    clean_json_path = clean_transcript_path(_cache_dir(config), audio_path)
-    cleaner = SegmentCleaner(config)
-    return cleaner.clean_file(raw_json_path, clean_json_path, overwrite=overwrite)
+def run_clean(audio_path: Path, config: dict[str, Any], *, overwrite: bool, raw_path: Path | None = None) -> Path:
+    audio = audio_path.expanduser().resolve()
+    raw_json = raw_path or raw_transcript_path(_cache_dir(config), audio)
+    return SegmentCleaner(config).clean_file(raw_json, clean_transcript_path(_cache_dir(config), audio), overwrite=overwrite)
 
 
-def run_translate(
-    audio_path: Path,
-    config: dict[str, Any],
-    *,
-    overwrite: bool,
-    clean_path: Path | None = None,
-) -> Path:
-    audio_path = audio_path.expanduser().resolve()
-    clean_json_path = clean_path or clean_transcript_path(_cache_dir(config), audio_path)
-    translated_json_path = translated_transcript_path(_cache_dir(config), audio_path)
-    translator = Translator(config)
-    return translator.translate_file(clean_json_path, translated_json_path, overwrite=overwrite)
+def run_translate(audio_path: Path, config: dict[str, Any], *, overwrite: bool, clean_path: Path | None = None) -> Path:
+    audio = audio_path.expanduser().resolve()
+    clean_json = clean_path or clean_transcript_path(_cache_dir(config), audio)
+    return Translator(config).translate_file(clean_json, translated_transcript_path(_cache_dir(config), audio), overwrite=overwrite)
 
 
-def run_write_lrc(
-    audio_path: Path,
-    config: dict[str, Any],
-    *,
-    overwrite: bool,
-    translated_path: Path | None = None,
-) -> tuple[Path, Path, Path, Path]:
-    audio_path = audio_path.expanduser().resolve()
-    translated_json_path = translated_path or translated_transcript_path(_cache_dir(config), audio_path)
-    primary_output_path, ja_output_path, zh_output_path, bilingual_output_path = _lrc_targets(audio_path, config)
-
-    writer = LRCWriter()
-    return writer.write_file(
-        translated_json_path,
-        primary_output_path,
-        ja_output_path,
-        zh_output_path,
-        bilingual_output_path,
+def run_write_subtitles(audio_path: Path, config: dict[str, Any], *, overwrite: bool, translated_path: Path | None = None, source_path: Path | None = None) -> tuple[Path, Path]:
+    audio = audio_path.expanduser().resolve()
+    translated = translated_path or translated_transcript_path(_cache_dir(config), audio)
+    lrc_targets = _lrc_targets(audio, config)
+    primary_lrc_target = lrc_targets[0]
+    if source_path is not None and source_path.suffix.lower() == '.lrc' and _same_path(source_path, primary_lrc_target):
+        primary_lrc_target = lrc_targets[2]
+    LRCWriter().write_file(
+        translated, primary_lrc_target, lrc_targets[1], lrc_targets[2], lrc_targets[3],
         primary_variant=str(config.get('lrc', {}).get('primary_variant', 'zh')),
         emit_ja=bool(config.get('lrc', {}).get('emit_ja_lrc', False)),
         emit_zh=bool(config.get('lrc', {}).get('emit_zh_lrc', False)),
         emit_bilingual=bool(config.get('lrc', {}).get('emit_bilingual_lrc', False)),
         overwrite=overwrite,
     )
+    vtt_target = VTTWriter().write_file(translated, *_vtt_targets(audio, config), source_path=source_path, overwrite=overwrite)
+    return primary_lrc_target, vtt_target
+
+
+def run_write_lrc(audio_path: Path, config: dict[str, Any], *, overwrite: bool, translated_path: Path | None = None):
+    return run_write_subtitles(audio_path, config, overwrite=overwrite, translated_path=translated_path)
 
 
 def _cache_dir(config: dict[str, Any]) -> Path:
     return Path(config.get('paths', {}).get('cache_dir', 'cache')).expanduser().resolve()
 
 
-def _lrc_targets(audio_path: Path, config: dict[str, Any]) -> tuple[Path, Path, Path, Path]:
-    output_mode = str(config.get('lrc', {}).get('output_mode', 'same_directory'))
-    if output_mode == 'same_directory':
-        output_dir = audio_path.parent
-    else:
-        output_dir = Path(config.get('paths', {}).get('output_dir', 'output')).expanduser().resolve()
-    return (
-        primary_lrc_path(output_dir, audio_path),
-        ja_lrc_path(output_dir, audio_path),
-        zh_lrc_path(output_dir, audio_path),
-        bilingual_lrc_path(output_dir, audio_path),
-    )
+def _output_dir(audio: Path, config: dict[str, Any]) -> Path:
+    if str(config.get('lrc', {}).get('output_mode', 'same_directory')) == 'same_directory':
+        return audio.parent
+    return Path(config.get('paths', {}).get('output_dir', 'output')).expanduser().resolve()
+
+
+def _lrc_targets(audio: Path, config: dict[str, Any]) -> tuple[Path, Path, Path, Path]:
+    output_dir = _output_dir(audio, config)
+    return primary_lrc_path(output_dir, audio), ja_lrc_path(output_dir, audio), zh_lrc_path(output_dir, audio), bilingual_lrc_path(output_dir, audio)
+
+
+def _vtt_targets(audio: Path, config: dict[str, Any]) -> tuple[Path, Path]:
+    output_dir = _output_dir(audio, config)
+    return primary_vtt_path(output_dir, audio), zh_vtt_path(output_dir, audio)
+
+
+def _copy_as_chinese_translation(clean_path: Path, translated_path: Path, *, overwrite: bool) -> Path:
+    if is_valid_json_file(translated_path) and not overwrite:
+        return translated_path
+    payload = load_json(clean_path)
+    for segment in payload.get('segments', []):
+        segment['translation'] = str(segment.get('text', '')).strip()
+    payload['translation_provider'] = 'existing_chinese_subtitle'
+    dump_json(translated_path, payload)
+    return translated_path
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    return str(left.resolve()).casefold() == str(right.resolve()).casefold()
+
+def _emit_result(payload: dict[str, Any], output: Path | None) -> None:
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    if output is not None:
+        from modules.io_utils import atomic_write_text
+        atomic_write_text(output.expanduser().resolve(), text + '\n')
+    print(text)
 
 
 if __name__ == '__main__':

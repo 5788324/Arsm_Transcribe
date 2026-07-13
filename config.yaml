@@ -2,6 +2,7 @@
   cache_dir: cache
   output_dir: output
   log_dir: logs
+  database_path: data/library.db
 
 asr:
   backend: faster_whisper

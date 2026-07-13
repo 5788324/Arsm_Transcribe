@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,6 +11,7 @@ from modules.io_utils import (
     AUDIO_EXTENSIONS,
     append_log_line,
     batch_status_path,
+    cancel_request_path,
     discover_audio_files,
     discover_reference_files,
     dump_json,
@@ -45,6 +46,7 @@ class BatchProcessor:
         status_path = batch_status_path(self.log_dir)
         failed_path.parent.mkdir(parents=True, exist_ok=True)
         failed_path.unlink(missing_ok=True)
+        cancel_request_path(self.log_dir).unlink(missing_ok=True)
 
         started_at = _now_iso()
         self._write_status(
@@ -148,6 +150,14 @@ class BatchProcessor:
         )
 
         for index, audio_path in enumerate(audio_files, start=1):
+            if cancel_request_path(self.log_dir).exists():
+                self._write_status(
+                    status_path, state='cancelled', started_at=started_at, updated_at=_now_iso(),
+                    total=total, succeeded=succeeded, failed=failed, skipped=skipped,
+                    current_index=index - 1, current_audio_path=None,
+                    last_error=None, mode=mode,
+                )
+                return BatchSummary(total=total, succeeded=succeeded, failed=failed, skipped=skipped, reference_items=reference_items)
             _safe_print(f'[batch] {index}/{total}: {audio_path}')
             current_error = None
             try:

@@ -1,8 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -45,11 +46,16 @@ def is_valid_json_file(path: Path) -> bool:
     return True
 
 
-def dump_json(path: Path, payload: dict[str, Any]) -> None:
+def atomic_write_text(path: Path, content: str) -> None:
     ensure_parent_dir(path)
-    with path.open('w', encoding='utf-8') as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-        handle.write('\n')
+    with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=path.parent, delete=False, suffix='.tmp') as handle:
+        handle.write(content)
+        temp_path = Path(handle.name)
+    temp_path.replace(path)
+
+
+def dump_json(path: Path, payload: dict[str, Any]) -> None:
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + '\n')
 
 
 def append_log_line(path: Path, message: str) -> None:
@@ -93,6 +99,10 @@ def batch_status_path(log_dir: Path) -> Path:
     return log_dir / 'batch_status.json'
 
 
+def cancel_request_path(log_dir: Path) -> Path:
+    return log_dir / 'cancel.request.json'
+
+
 def primary_lrc_path(output_dir: Path, audio_path: Path) -> Path:
     return output_dir / f'{stem_for_artifact(audio_path)}.lrc'
 
@@ -109,19 +119,20 @@ def bilingual_lrc_path(output_dir: Path, audio_path: Path) -> Path:
     return output_dir / f'{stem_for_artifact(audio_path)}.bilingual.lrc'
 
 
+def primary_vtt_path(output_dir: Path, audio_path: Path) -> Path:
+    return output_dir / f'{stem_for_artifact(audio_path)}.vtt'
+
+
+def zh_vtt_path(output_dir: Path, audio_path: Path) -> Path:
+    return output_dir / f'{stem_for_artifact(audio_path)}.zh.vtt'
+
+
 def discover_audio_files(root: Path) -> list[Path]:
-    grouped: dict[tuple[Path, str], Path] = {}
-    for path in root.rglob('*'):
-        if not path.is_file():
-            continue
-        suffix = path.suffix.lower()
-        if suffix not in AUDIO_EXTENSIONS:
-            continue
-        key = (path.parent, path.stem.casefold())
-        current = grouped.get(key)
-        if current is None or _audio_sort_key(path) < _audio_sort_key(current):
-            grouped[key] = path
-    return sorted(grouped.values())
+    """Return every supported media variant; WAV/MP3 siblings are distinct jobs."""
+    return sorted(
+        (path for path in root.rglob('*') if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS),
+        key=lambda path: str(path).casefold(),
+    )
 
 
 def discover_reference_files(audio_path: Path) -> list[Path]:

@@ -1,4 +1,51 @@
-### 2026-07-13 - AI: Codex - 只读盘点 E:\arsm 的音频与字幕资源
+﻿### 2026-07-13 - AI: Codex - 媒体资料库桌面端完整功能批次
+
+**打算做什么 / 为什么**
+- 按 owner 确认的合并交付方式，一次完成作品级资料库、PySide6 正式 UI、任务队列、基础质量检查、术语表与模型配置档案，不再把简单功能拆成多个小阶段。
+- 将当前已验证但尚未提交的第一轮产品化改动先固化为基线，再扩展 SQLite 与 API，避免新旧改动混杂且难以回退。
+- UI 采用现代媒体资料库风格；默认扫描预览后一次确认处理安全项目，不自动覆盖来源字幕，不对未知配对做猜测。
+
+**实际完成**
+- 进行中。
+
+**改动的文件**
+- `WORKLOG.md`
+
+**踩坑记录 / 下一步**
+- 当前环境未安装 PySide6，需要安装后才能运行和验收正式界面。
+
+---
+### 2026-07-13 - AI: Codex - 完整产品化第一轮实现
+
+**打算做什么 / 为什么**
+- 按 owner 已确认的完整产品方案，先建设可长期扩展的处理引擎基础：版本化 JSON 命令接口、SQLite 增量资料库、任务状态、安全写入和完整文件名字幕匹配。
+- 在现有 ASR → 清洗 → 翻译 → LRC 链路上补充中文 VTT 输出、扫描预览、语言/来源分类、冲突保护和诊断能力，为后续正式 PySide6 UI 提供稳定接口。
+- 同步重写已落后于实现的 `PROJECT.md` 与 `README.md`；不对 `E:\arsm` 执行全量写入。
+
+**实际完成**
+- 新增 API 1.0 引擎接口：`scan`、`plan`、`status`、`cancel`、`doctor`；扫描结果可输出 JSON，SQLite `data/library.db` 按路径增量 upsert。
+- 修复真实资料库命名缺口，优先识别 `audio.wav.vtt` / `audio.mp3.vtt` / 完整文件名 SRT；中文定时字幕直接转换，日文字幕只翻译，未知语言进入人工确认。
+- 取消旧的同 stem 格式去重，每个 WAV/MP3/视频版本均成为独立任务。
+- 新增中文 VTT 写出器；完整链路现在输出同名中文 LRC + VTT。来源 VTT 与目标同名时保留来源并写 `.zh.vtt`。
+- JSON、LRC、VTT 改为临时文件后原子替换；新增批处理文件间协作取消，桌面端增加扫描预览和停止按钮。
+- 新增 7 个单元测试，覆盖媒体版本、完整文件名 VTT、无翻译服务直接转换、VTT/LRC 来源冲突保护、SQLite 幂等和取消机制。
+- 全面更新 `PROJECT.md`、`README.md`、`config.yaml` 和 `.gitignore`，修正旧的双语输出与“不做 GUI”等失效描述。
+
+**改动的文件**
+- `app.py`、`desktop_app.py`、`config.yaml`
+- `modules/io_utils.py`、`modules/subtitle_sources.py`、`modules/lrc_writer.py`、`modules/batch.py`
+- 新增 `modules/vtt_writer.py`、`modules/catalog.py`、`modules/engine.py`
+- 新增 `tests/test_productization.py`
+- `PROJECT.md`、`README.md`、`WORKLOG.md`、`.gitignore`
+
+**踩坑记录 / 下一步**
+- 当前 Windows 沙箱的 `apply_patch` 包装器持续返回 Access denied，只能使用 PowerShell 等价补丁写入；已在 Git diff 中逐项审查。
+- 受限令牌下 Python 创建的临时目录 ACL 异常，单元测试需在沙箱外运行；沙箱外 7 项全部通过。
+- `doctor` 在 2026-07-13 再次检测到 LM Studio `/v1/models` 可用，与此前白屏/不可连接状态不同；只证明接口恢复，不代表当前模型质量或长批稳定性合格，仍待人工抽测。
+- PySide6 当前未安装，本轮保留并增强 tkinter 过渡界面，没有虚报正式 UI 已完成。
+- 下一步从 SQLite 任务/尝试表、暂停/恢复、质量规则与术语表继续；之后安装 PySide6 重做正式桌面端，再用小样本验收，最后对 `E:\arsm` 分批执行。
+
+---### 2026-07-13 - AI: Codex - 只读盘点 E:\arsm 的音频与字幕资源
 
 **打算做什么 / 为什么**
 - 对 `E:\arsm` 做只读资源盘点，区分需要 ASR 的音频、可从已有 VTT/SRT/日文 LRC 直接翻译的音频、已有可跳过 LRC 的音频，以及仅有 TXT/PDF 参考文本的目录。

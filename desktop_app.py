@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -81,7 +81,7 @@ class DesktopLauncher:
         self.model_var = tk.StringVar(value=str(self.config.get('translate', {}).get('model', '')))
         self.progress_text_var = tk.StringVar(value='进度：-')
         self.service_var = tk.StringVar(value='翻译服务：尚未检查')
-        self.output_var = tk.StringVar(value='主输出：音频同名中文 .lrc')
+        self.output_var = tk.StringVar(value='主输出：音频同名中文 .lrc + .vtt')
         self.pid_var = tk.StringVar(value='后台任务：未启动')
         self.overwrite_var = tk.BooleanVar(value=False)
 
@@ -177,7 +177,9 @@ class DesktopLauncher:
         actions = ttk.Frame(card, style='Card.TFrame')
         actions.pack(fill='x', pady=(12, 10))
         ttk.Button(actions, text='开始批量处理', style='Primary.TButton', command=self._start_batch).pack(side='left')
+        ttk.Button(actions, text='扫描预览', style='Soft.TButton', command=self._preview_scan).pack(side='left', padx=8)
         ttk.Button(actions, text='仅重试失败项', style='Soft.TButton', command=self._start_retry_failed).pack(side='left', padx=8)
+        ttk.Button(actions, text='停止当前任务', style='Soft.TButton', command=self._cancel_batch).pack(side='left', padx=8)
         ttk.Button(actions, text='刷新进度', style='Soft.TButton', command=self._refresh_status).pack(side='left', padx=8)
         ttk.Button(actions, text='打开日志', style='Soft.TButton', command=lambda: self._open_path(LOG_DIR)).pack(side='left')
         ttk.Button(actions, text='查看失败清单', style='Soft.TButton', command=self._open_failed_log).pack(side='left', padx=8)
@@ -278,9 +280,43 @@ class DesktopLauncher:
         self.roots.clear()
         self.root_list.delete(0, 'end')
 
+    def _preview_scan(self) -> None:
+        roots = list(self.root_list.get(0, 'end'))
+        if not roots:
+            messagebox.showwarning('未选择目录', '请先添加至少一个需要扫描的目录。')
+            return
+        self.status_var.set('任务状态：正在生成只读处理计划')
+
+        def worker() -> None:
+            try:
+                from modules.engine import EngineService
+                result = EngineService(self.config).plan([Path(value) for value in roots])
+                summary = result.get('summary', {})
+                detail = (
+                    f"扫描到 {len(result.get('items', []))} 个媒体文件\n\n"
+                    f"直接转换：{summary.get('convert_existing_subtitle', 0)}\n"
+                    f"只需翻译：{summary.get('translate_existing_subtitle', 0)}\n"
+                    f"需要转录：{summary.get('transcribe_audio', 0)}\n"
+                    f"已有 LRC 跳过：{summary.get('skip_existing_lrc', 0)}\n"
+                    f"待人工确认：{summary.get('manual_review', 0)}\n\n"
+                    '完整计划已写入 cache/latest_plan.json，本次未改写音频目录。'
+                )
+            except Exception as exc:
+                self.root.after(0, lambda error=exc: messagebox.showerror('扫描失败', f'{type(error).__name__}: {error}'))
+            else:
+                self.root.after(0, lambda: messagebox.showinfo('扫描预览完成', detail))
+            finally:
+                self.root.after(0, lambda: self.status_var.set('任务状态：等待开始'))
+
+        threading.Thread(target=worker, name='library-plan', daemon=True).start()
     def _start_batch(self) -> None:
         self._start_background_worker(retry_failed=False)
 
+    def _cancel_batch(self) -> None:
+        from modules.engine import EngineService
+        result = EngineService(self.config).cancel()
+        self.status_var.set('任务状态：已请求停止，将在当前文件完成后退出')
+        messagebox.showinfo('已请求停止', f"取消请求已写入：{result['cancel_request_path']}")
     def _start_retry_failed(self) -> None:
         self._start_background_worker(retry_failed=True)
 
@@ -355,7 +391,7 @@ class DesktopLauncher:
             progress = 0 if total <= 0 else completed / total * 100
             self.progress_var.set(progress)
             state = str(payload.get('state', 'unknown'))
-            state_label = {'scanning': '正在扫描目录', 'running': '正在处理', 'completed': '已完成'}.get(state, state)
+            state_label = {'scanning': '正在扫描目录', 'running': '正在处理', 'completed': '已完成', 'cancelled': '已停止'}.get(state, state)
             mode = str(payload.get('mode', 'full_scan'))
             mode_label = '失败重试' if mode == 'retry_failed' else '全库批处理'
             self.status_var.set(f'任务状态：{state_label}')

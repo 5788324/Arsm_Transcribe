@@ -1,8 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
-from modules.io_utils import ensure_parent_dir, load_json
+from modules.io_utils import atomic_write_text, load_json
 
 BY_TAG = '[by: yang \u521b\u5efa]'
 
@@ -97,8 +97,7 @@ def format_lrc_timestamp(seconds: float) -> str:
 
 
 def _write_lines(path: Path, lines: list[str]) -> None:
-    ensure_parent_dir(path)
-    path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    atomic_write_text(path, '\n'.join(lines) + '\n')
 
 
 def _remove_if_possible(path: Path) -> None:

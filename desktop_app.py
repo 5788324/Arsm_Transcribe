@@ -36,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='RJ-LRC-Local desktop launcher')
     parser.add_argument('--config', default='config.yaml')
     parser.add_argument('--batch-worker', action='store_true')
+    parser.add_argument('--retry-failed', action='store_true')
     parser.add_argument('--overwrite', action='store_true')
     parser.add_argument('roots', nargs='*')
     return parser
@@ -43,7 +44,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_batch_worker(args: argparse.Namespace) -> int:
     config = pipeline_app.load_config(Path(args.config))
-    summary = pipeline_app.run_batch([Path(value) for value in args.roots], config, overwrite=args.overwrite)
+    if args.retry_failed:
+        summary = pipeline_app.run_retry_failed(config, overwrite=args.overwrite)
+    else:
+        summary = pipeline_app.run_batch([Path(value) for value in args.roots], config, overwrite=args.overwrite)
     print(
         f'summary: total={summary.total}, succeeded={summary.succeeded}, '
         f'skipped={summary.skipped}, failed={summary.failed}'
@@ -161,6 +165,7 @@ class DesktopLauncher:
         actions = ttk.Frame(card, style='Card.TFrame')
         actions.pack(fill='x', pady=(12, 10))
         ttk.Button(actions, text='Start Background Batch', style='Primary.TButton', command=self._start_batch).pack(side='left')
+        ttk.Button(actions, text='Retry Failed', style='Soft.TButton', command=self._start_retry_failed).pack(side='left', padx=8)
         ttk.Button(actions, text='Refresh', style='Soft.TButton', command=self._refresh_status).pack(side='left', padx=8)
         ttk.Button(actions, text='Open Logs', style='Soft.TButton', command=lambda: self._open_path(LOG_DIR)).pack(side='left')
 
@@ -218,8 +223,14 @@ class DesktopLauncher:
         self.root_list.delete(0, 'end')
 
     def _start_batch(self) -> None:
+        self._start_background_worker(retry_failed=False)
+
+    def _start_retry_failed(self) -> None:
+        self._start_background_worker(retry_failed=True)
+
+    def _start_background_worker(self, *, retry_failed: bool) -> None:
         roots = list(self.root_list.get(0, 'end'))
-        if not roots:
+        if not retry_failed and not roots:
             messagebox.showwarning('No folders', 'Please add at least one folder to process.')
             return
         if self._runner_is_alive():
@@ -231,9 +242,12 @@ class DesktopLauncher:
             command = [sys.executable, '--batch-worker', '--config', str(self.config_path)]
         else:
             command = [sys.executable, '-B', str(Path(__file__).resolve()), '--batch-worker', '--config', str(self.config_path)]
+        if retry_failed:
+            command.append('--retry-failed')
         if self.overwrite_var.get():
             command.append('--overwrite')
-        command.extend(roots)
+        if not retry_failed:
+            command.extend(roots)
 
         stdout_handle = open(STDOUT_LOG, 'a', encoding='utf-8')
         stderr_handle = open(STDERR_LOG, 'a', encoding='utf-8')
@@ -249,13 +263,14 @@ class DesktopLauncher:
         runner_payload = {
             'pid': process.pid,
             'command': command,
-            'roots': roots,
+            'roots': roots if not retry_failed else [],
+            'mode': 'retry_failed' if retry_failed else 'full_scan',
             'started_at': datetime.now().isoformat(timespec='seconds'),
             'overwrite': self.overwrite_var.get(),
         }
         RUNNER_PATH.write_text(json.dumps(runner_payload, ensure_ascii=False, indent=2), encoding='utf-8')
         self.pid_var.set(f'Background PID: {process.pid}')
-        self.status_var.set('Background batch started')
+        self.status_var.set('Retrying failed files' if retry_failed else 'Background batch started')
         self.root.after(1000, self._refresh_status)
 
     def _refresh_status(self) -> None:

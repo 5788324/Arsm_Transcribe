@@ -174,6 +174,7 @@ lrc:
 
 ### 桌面程序与 EXE
 
+桌面界面的 `Retry Failed` 按钮会调用 `retry-failed`，只处理 `logs/failed.txt` 中保留的失败项。恢复 LM Studio 后，可先用它继续上次中断的批次。
 直接运行桌面启动器：
 
 ```powershell

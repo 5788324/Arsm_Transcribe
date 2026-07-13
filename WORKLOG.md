@@ -1,3 +1,26 @@
+### 2026-07-13 - AI: Codex - 诊断 LM Studio 并补桌面失败重试入口
+
+**打算做什么 / 为什么**
+- 启动并验证 LM Studio 本地 API，判断能否恢复 `E:\arsm` 的失败翻译重试。
+- 若 LM Studio 无法恢复，则记录可复现现象，继续完善不依赖模型服务的桌面 GUI：增加“仅重试失败文件”按钮，避免用户必须打开命令行。
+
+**实际完成**
+- 已确认 LM Studio 安装于 `C:\Users\YANG\AppData\Local\Programs\LM Studio\LM Studio.exe`，并成功启动进程；但窗口连续等待后仍为纯白界面，Local Server 无法操作，`http://127.0.0.1:1234/v1/models` 未恢复。此问题记录为待人工确认，不对 LM Studio 配置做猜测性修改。
+- 在 `desktop_app.py` 增加 `--retry-failed` worker 参数和 GUI 的 `Retry Failed` 按钮；点击后不要求选择目录，只处理 `logs/failed.txt` 中的失败音频。
+- GUI 启动记录新增 `mode` 字段，区分 `full_scan` 与 `retry_failed`，状态卡会显示重试已启动。
+- 更新 `PROJECT.md` 与 `README.md` 的桌面重试说明。
+
+**验证**
+- `python -m py_compile desktop_app.py` 通过。
+- `python -B desktop_app.py --help` 显示 `--retry-failed`。
+- 参数隔离测试确认 `--batch-worker --retry-failed` 可正确解析，且无需传目录。
+
+**下一步 / 待人工确认**
+- 待人工确认：LM Studio 白屏是程序自身启动异常、GPU/驱动问题，还是其他本机环境问题；目前无法从界面安全判断，且接口未运行。
+- 解决 LM Studio 后先抽测翻译，再通过 GUI `Retry Failed` 或 CLI `python -B app.py retry-failed` 恢复大库。
+- 不依赖模型服务的下一项可继续做 GUI 全流程真实验收与中文界面优化。
+
+---
 ### 2026-07-12 - AI: Codex - 补批处理失败重试并修复状态文档
 
 **打算做什么 / 为什么**

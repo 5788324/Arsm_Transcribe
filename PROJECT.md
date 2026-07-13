@@ -244,7 +244,7 @@ lrc:
 | 翻译模块 | 已实现并实测通过 | 已接到 `http://127.0.0.1:1234/v1` 的 LM Studio OpenAI-compatible 接口,并在真实样本上生成了 `translated.json`; 当前模型质量一般,但链路已通 |
 | LRC生成模块 | 已实现并实测通过 | 已实现 `modules/lrc_writer.py`; 在真实翻译结果基础上已对真实样本生成 `.ja.lrc` / `.zh.lrc` / `.bilingual.lrc`,并额外生成播放器可直接加载的同名主 `.lrc` |
 | 批处理总控 | 已实现，待大库恢复验收 | 支持递归扫描、断点跳过、失败记录、已有字幕检测与 `retry-failed`；`E:\arsm` 历史批次扫描到 2302 个音频，但 LM Studio 服务停止导致 1836 个翻译连接失败，恢复服务后应只重试失败项 |
-| 桌面 GUI / EXE | 已构建，待完整使用验收 | 已实现 `desktop_app.py`、`build_exe.py`、后台批次状态显示与 PyInstaller 打包；已生成 EXE，但仍需用真实目录完整验证启动、进度、失败恢复与播放器加载结果 |
+| 桌面 GUI / EXE | 已构建，待完整使用验收 | 已实现目录批处理、后台状态显示、`Retry Failed` 失败重试入口与 PyInstaller 打包；已生成 EXE，但仍需用真实目录验证启动、进度、失败恢复与播放器加载结果 |
 | Qwen3-ASR backend | 已建占位文件 | `modules/asr/qwen3_asr_backend.py` 已建空实现并明确提示需要 ForcedAligner,仍不要在阶段1-5完成前提前实现 |
 
 ---

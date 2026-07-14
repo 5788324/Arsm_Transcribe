@@ -29,20 +29,15 @@ def main() -> int:
     args = parser.parse_args()
     config = load_config(Path(args.config))
 
-    if args.command == 'run-single':
-        run_single(Path(args.audio), config, overwrite=args.overwrite)
-        return 0
-    if args.command == 'transcribe':
-        run_transcribe(Path(args.audio), config, overwrite=args.overwrite)
-        return 0
-    if args.command == 'clean':
-        run_clean(Path(args.audio), config, overwrite=args.overwrite)
-        return 0
-    if args.command == 'translate':
-        run_translate(Path(args.audio), config, overwrite=args.overwrite)
-        return 0
-    if args.command == 'write-lrc':
-        run_write_subtitles(Path(args.audio), config, overwrite=args.overwrite)
+    stage_commands = {
+        'run-single': lambda: run_single(Path(args.audio), config, overwrite=args.overwrite),
+        'transcribe': lambda: run_transcribe(Path(args.audio), config, overwrite=args.overwrite),
+        'clean': lambda: run_clean(Path(args.audio), config, overwrite=args.overwrite),
+        'translate': lambda: run_translate(Path(args.audio), config, overwrite=args.overwrite),
+        'write-lrc': lambda: run_write_subtitles(Path(args.audio), config, overwrite=args.overwrite),
+    }
+    if args.command in stage_commands:
+        stage_commands[args.command]()
         return 0
     if args.command == 'run-batch':
         summary = run_batch([Path(value) for value in args.roots], config, overwrite=args.overwrite)
@@ -52,23 +47,43 @@ def main() -> int:
         summary = run_retry_failed(config, overwrite=args.overwrite)
         print(f'retry summary: total={summary.total}, succeeded={summary.succeeded}, skipped={summary.skipped}, failed={summary.failed}')
         return 0 if summary.failed == 0 else 1
-    if args.command in {'scan', 'plan', 'status', 'cancel', 'doctor'}:
-        from modules.engine import EngineService
-        service = EngineService(config)
-        if args.command == 'scan':
-            result = service.scan([Path(value) for value in args.roots])
-        elif args.command == 'plan':
-            result = service.plan([Path(value) for value in args.roots])
-        elif args.command == 'status':
-            result = service.status()
-        elif args.command == 'cancel':
-            result = service.cancel()
-        else:
-            result = service.doctor()
-        _emit_result(result, Path(args.output) if getattr(args, 'output', None) else None)
-        return 0 if result.get('ok', False) else 2
-    parser.error(f'unsupported command: {args.command}')
-    return 2
+
+    from modules.engine import EngineService
+    service = EngineService(config)
+    if args.command == 'scan':
+        result = service.scan([Path(value) for value in args.roots])
+    elif args.command == 'plan':
+        result = service.plan([Path(value) for value in args.roots])
+    elif args.command == 'list-works':
+        result = service.list_works(search=args.search, action=args.action)
+    elif args.command == 'list-media':
+        result = service.list_media(args.work_id)
+    elif args.command == 'enqueue':
+        result = service.enqueue(work_ids=args.work_id or None, actions=args.action or None)
+    elif args.command == 'jobs':
+        result = service.jobs()
+    elif args.command in {'pause', 'resume', 'cancel-job'}:
+        state = {'pause': 'paused', 'resume': 'running', 'cancel-job': 'cancelled'}[args.command]
+        result = service.set_job_state(args.job_id, state)
+    elif args.command == 'review':
+        result = service.review(args.media_id or None)
+    elif args.command == 'profiles':
+        result = service.profiles()
+    elif args.command == 'glossary':
+        result = service.glossary(args.work_id)
+    elif args.command == 'add-term':
+        result = service.save_glossary(args.source, args.target, args.work_id)
+    elif args.command == 'status':
+        result = service.status()
+    elif args.command == 'cancel':
+        result = service.cancel()
+    elif args.command == 'doctor':
+        result = service.doctor()
+    else:
+        parser.error(f'unsupported command: {args.command}')
+        return 2
+    _emit_result(result, Path(args.output) if getattr(args, 'output', None) else None)
+    return 0 if result.get('ok', False) else 2
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,16 +103,60 @@ def build_parser() -> argparse.ArgumentParser:
         subparser = subparsers.add_parser(command_name)
         subparser.add_argument('roots', nargs='+')
         subparser.add_argument('--output')
-    for command_name in ('status', 'cancel', 'doctor'):
+    works = subparsers.add_parser('list-works')
+    works.add_argument('--search', default='')
+    works.add_argument('--action', default='')
+    works.add_argument('--output')
+    media = subparsers.add_parser('list-media')
+    media.add_argument('work_id', type=int)
+    media.add_argument('--output')
+    enqueue = subparsers.add_parser('enqueue')
+    enqueue.add_argument('--work-id', type=int, action='append')
+    enqueue.add_argument('--action', action='append')
+    enqueue.add_argument('--output')
+    subparsers.add_parser('jobs').add_argument('--output')
+    for command_name in ('pause', 'resume', 'cancel-job'):
         subparser = subparsers.add_parser(command_name)
+        subparser.add_argument('job_id', type=int)
         subparser.add_argument('--output')
+    review = subparsers.add_parser('review')
+    review.add_argument('--media-id', type=int, action='append')
+    review.add_argument('--output')
+    subparsers.add_parser('profiles').add_argument('--output')
+    glossary = subparsers.add_parser('glossary')
+    glossary.add_argument('--work-id', type=int)
+    glossary.add_argument('--output')
+    term = subparsers.add_parser('add-term')
+    term.add_argument('source')
+    term.add_argument('target')
+    term.add_argument('--work-id', type=int)
+    term.add_argument('--output')
+    for command_name in ('status', 'cancel', 'doctor'):
+        subparsers.add_parser(command_name).add_argument('--output')
     return parser
-
 
 def load_config(path: Path) -> dict[str, Any]:
     with path.open('r', encoding='utf-8-sig') as handle:
-        return yaml.safe_load(handle) or {}
-
+        config = yaml.safe_load(handle) or {}
+    paths_config = config.setdefault('paths', {})
+    for key in ('cache_dir', 'output_dir', 'log_dir', 'database_path'):
+        if key in paths_config:
+            candidate = Path(paths_config[key]).expanduser()
+            if not candidate.is_absolute():
+                paths_config[key] = str((path.resolve().parent / candidate).resolve())
+    cache_dir = Path(paths_config.get('cache_dir', path.resolve().parent / 'cache')).expanduser()
+    if not cache_dir.is_absolute():
+        cache_dir = (path.resolve().parent / cache_dir).resolve()
+    active_path = cache_dir / 'active_profiles.json'
+    if active_path.exists():
+        try:
+            active = json.loads(active_path.read_text(encoding='utf-8-sig')).get('profiles', {})
+        except Exception:
+            active = {}
+        for kind in ('asr', 'translate'):
+            if isinstance(active.get(kind), dict):
+                config[kind] = active[kind]
+    return config
 
 def run_single(audio_path: Path, config: dict[str, Any], *, overwrite: bool) -> str:
     audio = audio_path.expanduser().resolve()
@@ -111,7 +170,7 @@ def run_single(audio_path: Path, config: dict[str, Any], *, overwrite: bool) -> 
     if strategy['action'] == 'skip_existing_lrc' and not overwrite:
         return 'skipped'
     if strategy['action'] == 'manual_review':
-        raise RuntimeError(f"manual review required: {strategy['reason']} ({strategy['source_path']})")
+        return 'skipped'
 
     writer = LRCWriter()
     planned_lrc = writer.planned_outputs(

@@ -1,21 +1,54 @@
-﻿### 2026-07-13 - AI: Codex - 媒体资料库桌面端完整功能批次
+### 2026-07-14 - AI: Codex - LM Studio 小样本端到端验收
 
 **打算做什么 / 为什么**
-- 按 owner 确认的合并交付方式，一次完成作品级资料库、PySide6 正式 UI、任务队列、基础质量检查、术语表与模型配置档案，不再把简单功能拆成多个小阶段。
-- 将当前已验证但尚未提交的第一轮产品化改动先固化为基线，再扩展 SQLite 与 API，避免新旧改动混杂且难以回退。
-- UI 采用现代媒体资料库风格；默认扫描预览后一次确认处理安全项目，不自动覆盖来源字幕，不对未知配对做猜测。
+- LM Studio 已由用户恢复并确认本地服务运行；先验证 OpenAI-compatible API、当前加载模型与固定日文翻译，再挑选 1-3 个熟悉音声做小样本端到端验收。
+- 不启动全库批处理，不覆盖现有字幕；若模型响应、质量或长批稳定性不明确，记录为待人工确认而不编造结论。
 
-**实际完成**
-- 进行中。
 
-**改动的文件**
-- `WORKLOG.md`
-
-**踩坑记录 / 下一步**
-- 当前环境未安装 PySide6，需要安装后才能运行和验收正式界面。
+**实测结果**
+- `python -B app.py doctor` 已全部通过：ASR runner、缓存、SQLite、PySide6 与 `http://127.0.0.1:1234/v1` 均可用。
+- `/v1/models` 当前仅返回 `folder02` 与嵌入模型；`model=folder02` 的 `max_tokens=1` 请求在 0.47 秒返回，证明本地推理通道可工作。
+- 按项目当前翻译协议发送两句日文时，配置中的 `folder02@q4_k_s` 在 120 秒内没有首个响应；改用 `folder02`、加入 `/no_think` 且限制 256 token 后约 5.97 秒返回，但 JSON 中翻译内容为连续全角问号，`finish_reason=length`。
+- 已通过 LM Studio 扩展接口确认当前加载模型为 `Sakura 14B Qwen2.5 v1.0 Q4km`（`folder02`，GGUF，14B）；此前以别名推测为 Qwen3 是错误判断，已更正。
+- 去掉只适用于 Qwen3 的 `/no_think` 后，Sakura 仍在约 10.81 秒内生成连续全角问号，且 `finish_reason=length`、JSON 截断；当前模型运行结果不合格，未对任何音声、字幕或 `E:\arsm` 文件执行写入。
+- 用户确认机器上目前仅保留 Sakura；不再把切换 Qwen3 作为当前步骤。待人工确认：检查 Sakura 模型文件完整性、聊天模板和加载参数，必要时重新获取 Sakura 后以相同固定样本复测；通过后才开始 1-3 个真实小样本。
 
 ---
-### 2026-07-13 - AI: Codex - 完整产品化第一轮实现
+
+### 2026-07-13 - AI: Codex - 媒体资料库桌面端完整功能批次
+
+**打算做什么 / 为什么**
+- 按 owner 确认的合并交付方式，一次完成作品级资料库、PySide6 正式 UI、任务队列、基础质量检查、术语表与模型配置档案。
+- UI 采用现代媒体资料库风格；扫描预览后一次确认处理安全项目，不自动覆盖来源字幕，不对未知配对做猜测。
+
+**实际完成**
+- 将第一轮产品化基线提交为 `5c55a62 feat: add library engine and safe subtitle outputs`。
+- 安装 `PySide6-Essentials 6.11.1`，新建正式 `desktop_qt.py`，默认 `desktop_app.py` 改为 Qt 入口，旧 tkinter 界面保留为 `desktop_legacy.py`。
+- 完成六页媒体资料库 UI：总览、作品库、任务中心、质量审查、模型中心、术语表；使用深青/米白/珊瑚配色、作品封面缩略图、搜索筛选和状态表格。
+- SQLite 升级为 schema v2：works/media/subtitle_sources/jobs/attempts/quality_flags/model_profiles/glossary；兼容旧 media 表原地迁移。
+- API 升级 1.1，新增作品、音轨、任务、质量、模型档案和术语表命令；模型激活与术语分别通过 `active_profiles.json`、`glossary.json` 落盘接入模块。
+- 实现 RJ 优先、第一层目录兜底的作品聚合；消失文件标记离线，不删除历史。
+- 实现任务入队、进度同步、暂停/恢复、安全停止和失败重试；暂停等待当前文件完成，恢复依靠阶段 JSON 断点续跑。
+- 实现空翻译、日文残留、超长行、时间轴倒序/重叠和长静音质量规则。
+- 对 `E:\arsm` 做两次只读索引验证：267 个作品、8611 个媒体，直接转换 3350、只翻译 219、ASR 4934、已有 LRC 108；约 15 秒完成，作品查询约 127 ms。
+- 自动化测试扩展到 18 项并全部通过；PySide6 离屏窗口验证通过；构建并启动验证 `dist/Arsm-Transcribe-20260713-132137.exe`。
+- 更新 `PROJECT.md`、`README.md`、`requirements.txt`、配置和构建入口。
+
+**改动的文件**
+- `app.py`、`config.yaml`、`build_exe.py`、`requirements.txt`
+- `desktop_app.py`、`desktop_qt.py`、`desktop_legacy.py`
+- `modules/catalog.py`、`modules/engine.py`、`modules/library_grouping.py`、`modules/quality.py`、`modules/translate.py`
+- `tests/test_library_product.py`
+- `PROJECT.md`、`README.md`、`WORKLOG.md`
+
+**踩坑记录 / 下一步**
+- 完整 PySide6 包下载两次分别在 2 分钟和 10 分钟超时；改装较小的 PySide6-Essentials 后 169 秒成功，Qt Widgets 足够当前 UI。
+- 旧 schema v1 的 media 表没有 `work_id`，初版迁移在补列前创建索引会失败；已调整为先 ALTER 补列再建索引，并增加旧库迁移测试。
+- UI 截图成功生成，但本地图片查看工具受 Windows 沙箱包装器限制无法读取中文工作区路径；通过离屏窗口和 EXE 存活启动验证运行能力。
+- 真实扫描最初比当前文件多 1 个历史测试记录；新增缺失路径离线标记后二次扫描准确收敛到 8611。
+- LM Studio 目前诊断可用，但模型质量、长批稳定性和 VAD 阈值仍待人工确认。下一步先挑 1-3 个熟悉作品进行 UI 与播放器实测，不直接启动全库模型处理。
+
+---### 2026-07-13 - AI: Codex - 完整产品化第一轮实现
 
 **打算做什么 / 为什么**
 - 按 owner 已确认的完整产品方案，先建设可长期扩展的处理引擎基础：版本化 JSON 命令接口、SQLite 增量资料库、任务状态、安全写入和完整文件名字幕匹配。
@@ -506,4 +539,3 @@
 ---
 
 (以下是真实记录,按时间倒序往上加)
-

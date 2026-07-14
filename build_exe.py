@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
@@ -13,7 +13,7 @@ BUILD_DIR = REPO_ROOT / 'build'
 def main() -> None:
     DIST_DIR.mkdir(parents=True, exist_ok=True)
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    build_name = f"RJ-LRC-Local-GUI-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    build_name = f"Arsm-Transcribe-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     PyInstaller.__main__.run([
         '--noconfirm',
         '--clean',

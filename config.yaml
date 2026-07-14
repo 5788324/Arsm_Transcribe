@@ -52,3 +52,15 @@ lrc:
   emit_ja_lrc: false
   emit_zh_lrc: false
   emit_bilingual_lrc: false
+library:
+  roots:
+    - E:\arsm
+  scan_mode: preview_then_confirm
+  safe_actions:
+    - convert_existing_subtitle
+    - translate_existing_subtitle
+    - transcribe_audio
+
+ui:
+  theme: media_library
+  page_size: 500

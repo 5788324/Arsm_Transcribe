@@ -68,6 +68,15 @@ class ProductizationTests(unittest.TestCase):
             self.assertEqual((root / 'track.zh.lrc').resolve(), lrc_target)
             self.assertIn('こんにちは', source.read_text(encoding='utf-8'))
             self.assertIn('你好', lrc_target.read_text(encoding='utf-8-sig'))
+    def test_unknown_subtitle_is_skipped_for_manual_review(self) -> None:
+        with tempfile.TemporaryDirectory(dir='tests/.tmp') as temp:
+            root = Path(temp)
+            audio = root / 'track.wav'
+            audio.write_bytes(b'')
+            (root / 'track.wav.vtt').write_text('WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhello\n', encoding='utf-8')
+            config = {'paths': {'cache_dir': str(root / 'cache')}, 'lrc': {'output_mode': 'same_directory'}}
+            self.assertEqual('skipped', run_single(audio, config, overwrite=False))
+            self.assertFalse((root / 'track.lrc').exists())
     def test_vtt_writer_preserves_same_name_source(self) -> None:
         with tempfile.TemporaryDirectory(dir='tests/.tmp') as temp:
             root = Path(temp)

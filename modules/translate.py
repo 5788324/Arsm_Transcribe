@@ -18,6 +18,9 @@ class Translator:
         self.timeout_seconds = int(translate_config.get('timeout_seconds', 120))
         self.temperature = float(translate_config.get('temperature', 0.2))
         self.min_batch_size_on_retry = int(translate_config.get('min_batch_size_on_retry', 1))
+        cache_dir = Path(config.get('paths', {}).get('cache_dir', 'cache')).expanduser().resolve()
+        self.glossary_path = Path(translate_config.get('glossary_path', cache_dir / 'glossary.json')).expanduser().resolve()
+        self.glossary = self._load_glossary()
         self.system_prompt = str(
             translate_config.get(
                 'system_prompt',
@@ -81,8 +84,11 @@ class Translator:
             {'index': index, 'text': segment['text']}
             for index, segment in enumerate(batch)
         ]
+        glossary_note = ''
+        if self.glossary:
+            glossary_note = ' Use these required terminology mappings: ' + json.dumps(self.glossary, ensure_ascii=False) + '.'
         user_prompt = (
-            'Translate the following Japanese transcript lines into Simplified Chinese for subtitle use. '
+            'Translate the following Japanese transcript lines into Simplified Chinese for subtitle use.' + glossary_note + ' '
             'Return a JSON array and nothing else. Each item must have keys index and translation.\n\n'
             f'Input:\n{json.dumps(numbered_lines, ensure_ascii=False)}'
         )
@@ -114,6 +120,14 @@ class Translator:
             raise ValueError('translation batch contains empty translation text')
         return translations
 
+    def _load_glossary(self) -> dict[str, str]:
+        if not self.glossary_path.exists():
+            return {}
+        try:
+            payload = load_json(self.glossary_path)
+        except Exception:
+            return {}
+        return {str(term['source']): str(term['target']) for term in payload.get('terms', []) if term.get('source') and term.get('target')}
     def _passthrough_segment(self, segment: dict[str, Any]) -> dict[str, Any]:
         return {
             'start': segment['start'],
